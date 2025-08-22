@@ -3,14 +3,16 @@ set -euo pipefail
 
 # Paths
 ROOT_DIR="/pipeline/TRANSFORM"
-DATA_DIR="$ROOT_DIR/data/site3"
-OUT_DIR="$ROOT_DIR/output"
+SITE_NAME="Site3"
+DATA_DIR="$ROOT_DIR/data/$SITE_NAME"
+OUT_DIR="$ROOT_DIR/output/$SITE_NAME"
+mkdir -p "$OUT_DIR"
 SCRIPT_DIR="$ROOT_DIR/scripts"
 
-LIDAR_FILE="$DATA_DIR/lidar/MurphysSite3-NoColor.las"
+LIDAR_FILE="$DATA_DIR/lidar/Lidar-NoColor.las"
 ORIGIN_FILE="$DATA_DIR/splat/origin_point.txt"
 TARGET_PLY="$DATA_DIR/splat/sparse_transformed.ply"
-KML_FILE="$ROOT_DIR/data/site3/Site3.kml"
+KML_FILE="$DATA_DIR/$SITE_NAME.kml"
 
 mkdir -p "$OUT_DIR"
 
@@ -22,10 +24,12 @@ python3 "$SCRIPT_DIR/estimate_transform.py" \
   --origin-file "$ORIGIN_FILE" \
   --target-ply "$TARGET_PLY" \
   --out-dir "$OUT_DIR" \
-  --nn-radius 2.0 --max-pairs 3000000 \
-  --xy-iters 12 --xy-radius 0.8 --z-gate 2.5 --max-pairs-xy 3000000 \
+  --nn-radius 0.5 --max-pairs 3000000 \
+  --xy-iters 24 --xy-radius 0.25 --z-gate 0.5 --max-pairs-xy 3000000 \
   --kml-boundary "$KML_FILE" \
-  --kml-crs epsg:4326
+  --kml-crs epsg:4326 \
+  --lidar-sample 10000000 \
+  --lidar-chunk-size 2000000
 
 BASE="$(basename "$LIDAR_FILE")"
 BASE_NO_EXT="${BASE%.*}"
@@ -64,6 +68,6 @@ python3 "$SCRIPT_DIR/verify_alignment.py" \
   --file "$LIDAR_FILE" \
   --transform-json "$ALIGN_JSON" \
   --target-ply "$TARGET_PLY" \
-  --nn-radius 0.8 --max-samples 3000000 | tee "$OUT_DIR/${BASE_NO_EXT}_verify_stats.json"
+  --nn-radius 0.5 --max-samples 3000000 | tee "$OUT_DIR/${BASE_NO_EXT}_verify_stats.json"
 
 echo "Done. Outputs in: $OUT_DIR" 

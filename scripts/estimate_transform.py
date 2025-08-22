@@ -379,6 +379,66 @@ def _write_cropped_target_ply_from_file(ply_path: str, poly_target_xy: Optional[
     out_ply.write(out_path)
 
 
+def _sample_lidar_local_from_las(laz_path: str, origin_path: str, max_points: int = 10_000_000,
+                                 chunk_size: int = 2_000_000, seed: int = 123) -> Tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    import laspy  # type: ignore
+    from pyproj import Transformer  # type: ignore
+    laz_path = os.path.abspath(laz_path)
+    if not os.path.exists(laz_path):
+        raise FileNotFoundError(laz_path)
+    if not os.path.exists(origin_path):
+        raise FileNotFoundError(origin_path)
+    lat, lon = _read_origin_lat_lon(origin_path)
+    with laspy.open(laz_path) as reader:
+        crs = None
+        try:
+            crs = reader.header.parse_crs()
+        except Exception:
+            crs = None
+        if crs is None or not crs.is_projected:
+            raise RuntimeError("Input file CRS is missing or not projected. Expected a projected CRS (e.g., UTM).")
+        transformer = Transformer.from_crs(4326, crs, always_xy=True)
+        origin_e, origin_n = transformer.transform(lon, lat)
+        total = reader.header.point_count
+        if total <= 0:
+            raise RuntimeError("Empty LAS/LAZ")
+        keep_prob = min(1.0, float(max_points) / float(total))
+        rng = np.random.default_rng(seed)
+        xs_all: list[np.ndarray] = []
+        ys_all: list[np.ndarray] = []
+        zs_all: list[np.ndarray] = []
+        kept = 0
+        for chunk in reader.chunk_iterator(chunk_size):
+            h = reader.header
+            xs = chunk.X * h.scales[0] + h.offsets[0]
+            ys = chunk.Y * h.scales[1] + h.offsets[1]
+            zs = chunk.Z * h.scales[2] + h.offsets[2]
+            n = xs.shape[0]
+            mask = rng.random(n) < keep_prob
+            if np.any(mask):
+                xs_all.append(xs[mask] - origin_e)
+                ys_all.append(ys[mask] - origin_n)
+                zs_all.append(zs[mask])
+                kept += int(mask.sum())
+        if kept == 0:
+            raise RuntimeError("Sampling kept 0 points; increase --lidar-sample or check file")
+        x_local = np.concatenate(xs_all, axis=0)
+        y_local = np.concatenate(ys_all, axis=0)
+        z = np.concatenate(zs_all, axis=0)
+        # If we overshot, downsample to exactly max_points
+        if x_local.shape[0] > max_points:
+            sel = np.random.default_rng(seed + 1).choice(x_local.shape[0], size=max_points, replace=False)
+            x_local = x_local[sel]
+            y_local = y_local[sel]
+            z = z[sel]
+        meta = {
+            "epsg": getattr(crs, "to_epsg", lambda: None)(),
+            "origin_e": float(origin_e),
+            "origin_n": float(origin_n),
+        }
+        return x_local.astype(np.float64, copy=False), y_local.astype(np.float64, copy=False), z.astype(np.float64, copy=False), meta
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Estimate LiDAR→target transform and write outputs")
     parser.add_argument("--lidar-file", required=True)
@@ -393,9 +453,13 @@ def main() -> int:
     parser.add_argument("--max-pairs-xy", type=int, default=3000000)
     parser.add_argument("--kml-boundary", default=None, help="KML polygon to crop to")
     parser.add_argument("--kml-crs", default="epsg:4326", help="CRS of KML coords or 'target' if already in target XY")
+    parser.add_argument("--lidar-sample", type=int, default=10_000_000, help="Max LiDAR points to sample for estimation")
+    parser.add_argument("--lidar-chunk-size", type=int, default=2_000_000, help="Chunk size when sampling LiDAR")
     args = parser.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    x_local, y_local, z_lidar, meta = _to_local_from_las(args.lidar_file, args.origin_file)
+    x_local, y_local, z_lidar, meta = _sample_lidar_local_from_las(
+        args.lidar_file, args.origin_file, max_points=args.lidar_sample, chunk_size=args.lidar_chunk_size
+    )
     lidar_epsg = meta.get("epsg")
     origin_e = meta["origin_e"]
     origin_n = meta["origin_n"]
