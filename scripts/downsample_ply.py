@@ -27,7 +27,8 @@ def downsample_ply_random(in_path: str, out_path: Optional[str], fraction: float
     if "vertex" not in ply:
         raise RuntimeError("PLY missing 'vertex' element")
     vertex = ply["vertex"]
-    n = len(vertex)
+    vertex_data = vertex.data
+    n = len(vertex_data)
     if n == 0:
         raise RuntimeError("PLY has zero vertices")
 
@@ -42,11 +43,15 @@ def downsample_ply_random(in_path: str, out_path: Optional[str], fraction: float
             mask[pick] = True
         idx = np.nonzero(mask)[0]
 
-    vertex_ds = vertex[idx]
+    vertex_ds = vertex_data[idx]
 
-    # Rebuild PlyData with the downsampled vertex, preserving properties
+    # Rebuild PlyData with the downsampled vertex, preserving properties (including color if present)
     el_vertex = PlyElement.describe(vertex_ds, "vertex")
     out_ply = PlyData([el_vertex], text=ply.text)
+    try:
+        out_ply.comments = list(getattr(ply, "comments", []))
+    except Exception:
+        pass
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     out_ply.write(out_path)

@@ -10,6 +10,7 @@ SCRIPT_DIR="$ROOT_DIR/scripts"
 LIDAR_FILE="$DATA_DIR/lidar/MurphysSite3-NoColor.las"
 ORIGIN_FILE="$DATA_DIR/splat/origin_point.txt"
 TARGET_PLY="$DATA_DIR/splat/sparse_transformed.ply"
+KML_FILE="$ROOT_DIR/data/site3/Site3.kml"
 
 mkdir -p "$OUT_DIR"
 
@@ -22,26 +23,33 @@ python3 "$SCRIPT_DIR/estimate_transform.py" \
   --target-ply "$TARGET_PLY" \
   --out-dir "$OUT_DIR" \
   --nn-radius 2.0 --max-pairs 3000000 \
-  --xy-iters 12 --xy-radius 0.8 --z-gate 2.5 --max-pairs-xy 3000000
+  --xy-iters 12 --xy-radius 0.8 --z-gate 2.5 --max-pairs-xy 3000000 \
+  --kml-boundary "$KML_FILE" \
+  --kml-crs epsg:4326
 
 BASE="$(basename "$LIDAR_FILE")"
 BASE_NO_EXT="${BASE%.*}"
 ALIGN_JSON="$OUT_DIR/${BASE_NO_EXT}_align.json"
 ALIGNED_LAS="$OUT_DIR/${BASE_NO_EXT}_aligned.las"
 
-# Produce a small downsampled preview for quick visual checks
+# Produce a small downsampled preview for quick visual checks (cropped aligned LiDAR)
 echo "[1b] Creating downsampled preview LAZ (aligned LiDAR)..."
 python3 "$SCRIPT_DIR/downsample_las.py" \
   --file "$ALIGNED_LAS" \
   --out "$OUT_DIR/${BASE_NO_EXT}_aligned_preview.laz" \
   --fraction 0.02
 
-# Also produce a downsampled preview of the target reference PLY
+# Also produce a downsampled preview of the target reference PLY (cropped version if available)
 echo "[1c] Creating downsampled preview PLY (target reference)..."
 TARGET_BASE="$(basename "$TARGET_PLY")"
 TARGET_NO_EXT="${TARGET_BASE%.*}"
+CROPPED_TARGET_PLY="$OUT_DIR/${TARGET_NO_EXT}_cropped.ply"
+TARGET_PREVIEW_SRC="$TARGET_PLY"
+if [ -f "$CROPPED_TARGET_PLY" ]; then
+  TARGET_PREVIEW_SRC="$CROPPED_TARGET_PLY"
+fi
 python3 "$SCRIPT_DIR/downsample_ply.py" \
-  --file "$TARGET_PLY" \
+  --file "$TARGET_PREVIEW_SRC" \
   --out "$OUT_DIR/${TARGET_NO_EXT}_preview.ply" \
   --fraction 0.02
 

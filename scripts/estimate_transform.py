@@ -140,10 +140,18 @@ def _compute_coarse_xy(lidar_xy_local: np.ndarray, target_xy: np.ndarray, nn_rad
         A = lidar_xy_local
     tree = cKDTree(target_xy)
     dists, nn_idx = tree.query(A, k=1, workers=-1)
-    mask = dists <= nn_radius
-    if np.count_nonzero(mask) < 100:
-        # Not enough matches for a stable estimate; return identity
+    # Use the best-matching subset by distance (robust, no fixed radius gating)
+    if A.shape[0] < 100:
         return 1.0, np.eye(2), np.zeros(2)
+    # Keep up to 200k best pairs or 80th percentile, whichever is smaller
+    k = min(200000, A.shape[0])
+    order = np.argsort(dists)
+    sel = order[:k]
+    # Further trim by percentile to reduce extreme outliers
+    thr = float(np.percentile(dists[sel], 80.0))
+    mask = dists <= thr
+    if np.count_nonzero(mask) < 100:
+        mask = sel  # fall back to top-k if too few by percentile
     A_in = A[mask]
     B_in = target_xy[nn_idx[mask]]
     s, R, t = _estimate_similarity_2d(A_in, B_in)
@@ -347,17 +355,28 @@ def _maybe_make_poly_in_target_xy(kml_path: Optional[str], kml_crs: Optional[str
     return poly_target
 
 
-def _write_cropped_target_ply(target_xyz_local: np.ndarray, poly_target_xy: Optional[np.ndarray], out_path: str) -> None:
+def _write_cropped_target_ply_from_file(ply_path: str, poly_target_xy: Optional[np.ndarray], out_path: str) -> None:
     from plyfile import PlyData, PlyElement  # type: ignore
-    pts = target_xyz_local
+    ply = PlyData.read(ply_path)
+    if "vertex" not in ply:
+        raise RuntimeError("PLY missing 'vertex' element")
+    v = ply["vertex"]
+    xs = np.asarray(v["x"], dtype=np.float64)
+    ys = np.asarray(v["y"], dtype=np.float64)
+    pts_xy = np.stack([xs, ys], axis=1)
     if poly_target_xy is not None:
-        inside = _points_in_polygon(pts[:, :2], poly_target_xy)
-        pts = pts[inside]
-    el = PlyElement.describe(np.array(list(zip(pts[:, 0], pts[:, 1], pts[:, 2])),
-                                     dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")]), "vertex")
-    ply = PlyData([el], text=False)
+        inside = _points_in_polygon(pts_xy, poly_target_xy)
+    else:
+        inside = np.ones(xs.shape[0], dtype=bool)
+    data = v.data[inside]
+    el = PlyElement.describe(data, "vertex")
+    out_ply = PlyData([el], text=ply.text)
+    try:
+        out_ply.comments = list(getattr(ply, "comments", []))
+    except Exception:
+        pass
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    ply.write(out_path)
+    out_ply.write(out_path)
 
 
 def main() -> int:
@@ -402,6 +421,7 @@ def main() -> int:
         mask_lidar = _points_in_polygon(lidar_xy_coarse, poly_target_xy)
         lidar_xy_local = lidar_xy_local[mask_lidar]
         z_lidar = z_lidar[mask_lidar]
+        print(f"Cropping with KML polygon → lidar_in: {lidar_xy_local.shape[0]}, target_in: {target_xyz.shape[0]}")
         if lidar_xy_local.shape[0] == 0 or target_xyz.shape[0] == 0:
             raise RuntimeError("Cropping removed all points; check KML alignment and CRS settings")
     # 5) Refine XY + Z on cropped data
@@ -431,7 +451,7 @@ def main() -> int:
     if poly_target_xy is not None:
         tgt_base = os.path.splitext(os.path.basename(args.target_ply))[0]
         out_tgt_cropped = os.path.join(args.out_dir, f"{tgt_base}_cropped.ply")
-        _write_cropped_target_ply(_read_ply_xyz(args.target_ply, max_points=10_000_000), poly_target_xy, out_tgt_cropped)
+        _write_cropped_target_ply_from_file(args.target_ply, poly_target_xy, out_tgt_cropped)
     print("Alignment complete")
     print(json.dumps(existing["stats"], indent=2))
     print(f"Wrote aligned LAZ: {out_laz}")
