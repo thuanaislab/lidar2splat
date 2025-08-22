@@ -54,4 +54,4 @@ python3 "$SCRIPT_DIR/apply_transform_file.py" \
 
 echo "Done. Outputs:"
 echo "  Aligned LAS:   $OUT_LAS"
-echo "  Preview LAZ:   $OUT_DIR/${BASE_NO_EXT}_aligned_preview.laz" 
+echo "  Preview LAZ:   $OUT_DIR/${BASE_NO_EXT}_aligned_preview.$FORMAT" 
